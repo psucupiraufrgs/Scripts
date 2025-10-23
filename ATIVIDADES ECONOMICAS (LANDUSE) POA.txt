@@ -1,0 +1,110 @@
+!pip install pandas openpyxl requests osmnx
+
+import pandas as pd
+import requests
+from time import sleep
+import osmnx as ox
+
+# 🧠 Palavras-chave industriais (podem ser ampliadas para comércio/serviços também!)
+palavras_chave = [
+    "indústria", "fábrica", "metalúrgica", "química", "plásticos", "alimentos",
+    "bebidas", "farmacêutica", "autopeças", "mecânica", "logística", "têxtil",
+    "embalagens", "cerâmica", "eletrônicos", "gráfica"
+]
+
+# Pontos de busca Porto Alegre
+pontos_busca = [
+    (-30.0346, -51.2177),  # Centro
+    (-30.0602, -51.1471),  # Zona Norte
+    (-30.0830, -51.2570),  # Zona Oeste
+    (-30.0778, -51.2130),  # Noroeste
+    (-30.1000, -51.2300),  # Extremo Sul
+    (-30.0200, -51.2000),  # Leste
+]
+
+# Função para buscar OSM
+def buscar_osm(lat, lon, palavra):
+    tags = {'name': True, 'amenity': True, 'shop': True, 'industrial': True, 'man_made': True}
+    gdf = ox.geometries.geometries_from_point((lat, lon), dist=3000, tags=tags)
+    # Filtrar pelas palavras-chave
+    mask = gdf.apply(lambda row: any(palavra in str(val).lower() for val in row.values), axis=1)
+    gdf_filtrado = gdf[mask]
+    results = []
+    for idx, row in gdf_filtrado.iterrows():
+        results.append({
+            "Nome": row.get("name", ""),
+            "Endereço": row.get("addr:street", ""),
+            "Latitude": row.geometry.centroid.y if row.geometry is not None else "",
+            "Longitude": row.geometry.centroid.x if row.geometry is not None else "",
+            "Tipo": row.get("industrial", "") or row.get("shop", "") or row.get("amenity", ""),
+            "Fonte": "OSM",
+            "Palavra-chave": palavra
+        })
+    return results
+
+# Coleta Google (como no seu script)
+def buscar_locais_google(lat, lon, palavra):
+    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {
+        "location": f"{lat},{lon}",
+        "radius": 3000,
+        "keyword": palavra,
+        "type": "establishment",
+        "key": API_KEY
+    }
+    resultados = []
+    while True:
+        r = requests.get(url, params=params).json()
+        resultados.extend(r.get("results", []))
+        if "next_page_token" in r:
+            sleep(2)
+            params["pagetoken"] = r["next_page_token"]
+        else:
+            break
+    lista = []
+    for l in resultados:
+        lista.append({
+            "Nome": l.get("name"),
+            "Endereço": l.get("vicinity"),
+            "Latitude": l["geometry"]["location"]["lat"],
+            "Longitude": l["geometry"]["location"]["lng"],
+            "Tipo": ", ".join(l.get("types", [])),
+            "Fonte": "Google",
+            "Palavra-chave": palavra
+        })
+    return lista
+
+# 🔍 Coleta combinada
+todos_resultados = []
+for lat, lon in pontos_busca:
+    for palavra in palavras_chave:
+        print(f"🔎 Buscando '{palavra}' em ({lat}, {lon})... OSM")
+        todos_resultados += buscar_osm(lat, lon, palavra)
+        # Google (comentar/descomentar se desejar, pois pode consumir cota paga)
+        # print(f"🔎 Buscando '{palavra}' em ({lat}, {lon})... Google")
+        # todos_resultados += buscar_locais_google(lat, lon, palavra)
+        sleep(1)
+
+# 📊 DataFrame
+df = pd.DataFrame(todos_resultados)
+df.drop_duplicates(subset=["Nome", "Endereço", "Latitude", "Longitude", "Fonte"], inplace=True)
+
+# 🏷️ Reclassificação para Indústria, Comércio, Serviços
+def reclassificar(tipo, palavra):
+    palavra = str(palavra).lower()
+    if palavra in ["indústria", "fábrica", "metalúrgica", "química", "plásticos", "alimentos", "bebidas", "farmacêutica", "autopeças", "mecânica", "têxtil", "embalagens", "cerâmica", "eletrônicos", "gráfica"]:
+        return "Indústria"
+    # Para comércio/serviços, adapte as palavras se usar outras buscas
+    elif "comércio" in palavra or "loja" in tipo.lower():
+        return "Comércio"
+    elif "serviço" in palavra or "logística" in palavra:
+        return "Serviços"
+    else:
+        return "Indústria"  # Por padrão, pelo seu universo de palavras-chave
+
+df["Classe_Simplificada"] = df.apply(lambda x: reclassificar(str(x.get("Tipo", "")), str(x.get("Palavra-chave", ""))), axis=1)
+
+# 💾 Salvar Excel
+nome_arquivo = "industria_porto_alegre_osm_google.xlsx"
+df.to_excel(nome_arquivo, index=False)
+print(f"Tabela final salva: {nome_arquivo}")
