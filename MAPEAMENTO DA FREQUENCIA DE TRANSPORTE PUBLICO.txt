@@ -1,0 +1,55 @@
+# MAPEAMENTO DA FREQUENCIA DE TRANSPORTE PÚBLICO
+
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import LineString
+
+# Carregar arquivos GTFS (já enviados para o Colab)
+routes = pd.read_csv("routes.txt")
+trips = pd.read_csv("trips.txt")
+stop_times = pd.read_csv("stop_times.txt")
+shapes = pd.read_csv("shapes.txt")
+calendar = pd.read_csv("calendar.txt")
+
+# Calcular frequência diária por linha (ex.: dias úteis)
+trips_dias_uteis = trips.merge(calendar[calendar["monday"] == 1], on="service_id")
+frequencia_por_linha = trips_dias_uteis.groupby("route_id")["trip_id"].nunique().reset_index()
+frequencia_por_linha.columns = ["route_id", "Frequência_Diária"]
+
+# Associar linhas aos trechos (shapes)
+shape_trips = trips[["route_id", "shape_id"]].drop_duplicates()
+shapes_grouped = shapes.groupby("shape_id")[["shape_pt_lat", "shape_pt_lon"]].apply(
+    lambda x: LineString(zip(x["shape_pt_lon"], x["shape_pt_lat"]))).reset_index()
+shapes_grouped.columns = ["shape_id", "geometry"]
+
+# Converter para WKT
+shapes_grouped["Coordenadas_WKT"] = shapes_grouped["geometry"].apply(lambda x: x.wkt)
+
+# Juntar dados
+dados = shape_trips.merge(frequencia_por_linha, on="route_id").merge(
+    routes[["route_id", "route_short_name"]], on="route_id").merge(
+    shapes_grouped[["shape_id", "Coordenadas_WKT"]], on="shape_id")
+
+# Calcular frequência total por trecho (agrupar por shape_id)
+frequencia_total = dados.groupby("shape_id")["Frequência_Diária"].sum().reset_index()
+frequencia_total.columns = ["shape_id", "Frequência_Total"]
+
+# Criar planilha final
+planilha = dados.merge(frequencia_total, on="shape_id")
+planilha["Horário_Semanal"] = "Dias úteis"
+planilha["Sentido"] = planilha["shape_id"].apply(lambda x: "Ida" if "ida" in str(x).lower() else "Volta")  # Simplificação
+planilha["ID_Trecho"] = planilha["shape_id"]  # Usar shape_id como ID do trecho
+planilha["Nome_Rua"] = "Desconhecido"  # Requer integração com malha viária
+
+# Selecionar colunas relevantes
+planilha = planilha[["ID_Trecho", "Nome_Rua", "route_short_name", "Frequência_Diária",
+                     "Frequência_Total", "Coordenadas_WKT", "Horário_Semanal", "Sentido"]]
+planilha.columns = ["ID_Trecho", "Nome_Rua", "Linha", "Frequência_Diária",
+                   "Frequência_Total", "Coordenadas_WKT", "Horário_Semanal", "Sentido"]
+
+# Exportar para CSV
+planilha.to_csv("frequencias_transporte_poa.csv", index=False)
+
+# Baixar o arquivo CSV no Colab
+from google.colab import files
+files.download("frequencias_transporte_poa.csv")
