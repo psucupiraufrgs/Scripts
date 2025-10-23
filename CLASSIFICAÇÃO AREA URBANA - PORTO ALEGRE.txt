@@ -1,0 +1,49 @@
+// ===========================
+// CLASSIFICAÇÃO AREA URBANA - PORTO ALEGRE (13/05/2025)
+// ===========================
+
+// 1. Importar o limite do município (substitua com seu asset)
+var porto_alegre = ee.FeatureCollection("users/psucupira/porto_alegre_limite");
+
+// 2. Filtrar imagem Sentinel-2 L2A para a data
+var image = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(porto_alegre)
+  .filterDate('2025-05-13', '2025-05-14')  // data exata
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+  .median()
+  .clip(porto_alegre);
+
+// 3. Calcular índices NDVI e NDBI
+var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+var ndbi = image.normalizedDifference(['B11', 'B8']).rename('NDBI');
+
+// 4. Usar Scene Classification (SCL) para máscara
+var scl = image.select('SCL');
+var scl_mask = scl.eq(5).or(scl.eq(6));  // solo exposto ou área construída
+
+// 5. Criar a máscara urbana: NDBI > 0.1, NDVI < 0.3, SCL válido
+var urbano = ndbi.gt(0.1)
+                .and(ndvi.lt(0.3))
+                .and(scl_mask)
+                .rename('Urbano');
+
+// 6. Visualização
+Map.centerObject(porto_alegre, 11);
+Map.addLayer(image, {bands: ['B12', 'B8', 'B4'], min: 0, max: 3000}, 'Falsa Cor Urbana');
+Map.addLayer(urbano.updateMask(urbano), {palette: ['red']}, 'Áreas Urbanas Prováveis');
+
+// 7. Exportar para SHAPEFILE
+var vetor_urbano = urbano.selfMask().reduceToVectors({
+  geometry: porto_alegre.geometry(),
+  scale: 10,
+  geometryType: 'polygon',
+  labelProperty: 'class',
+  maxPixels: 1e13
+});
+
+Export.table.toDrive({
+  collection: vetor_urbano,
+  description: 'Urban_Class_PortoAlegre_2025',
+  folder: 'GEE_Export',
+  fileFormat: 'SHP'
+});
