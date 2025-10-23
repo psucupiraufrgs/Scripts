@@ -1,0 +1,42 @@
+Executar o script no GEE: 
+// ------------------------------------------- 
+// EXTRAÇÃO DE USO E COBERTURA DO SOLO 
+// FONTE: MapBiomas - Coleção 9 (1985–2023) 
+// -------------------------------------------
+var mapbiomas = ee.Image("projects/mapbiomas-public/assets/brazil/lulc/collection9/mapbiomas_collection90_integration_v1");
+var Porto_alegre = ee.FeatureCollection("users/psucupira/porto_alegre_limite");
+
+var anos = [1985, 1995, 2005, 2015, 2023];
+
+var urbanismo = anos.map(function(ano) {
+  var urbano = mapbiomas.select('classification_' + ano)
+                .eq(24) // classe urbana
+                .selfMask()
+                .clip(Porto_alegre);
+
+  Map.addLayer(urbano, {palette: ['red']}, 'Urbano ' + ano);
+
+  var vetor = urbano.reduceToVectors({
+    geometry: Porto_alegre.geometry(),
+    scale: 30,
+    geometryType: 'polygon',
+    labelProperty: 'classe',
+    reducer: ee.Reducer.countEvery(),
+    maxPixels: 1e13
+  }).map(function(feat) {
+    var area = feat.geometry(1).area(1).divide(1e6); // km² com tolerância
+    return feat.set({'ano': ano, 'area_km2': area});
+  });
+
+  return vetor;
+});
+
+var urbanismoFC = ee.FeatureCollection(urbanismo).flatten();
+print('Polígonos urbanos com área (km²):', urbanismoFC);
+
+Export.table.toDrive({
+  collection: urbanismoFC,
+  description: 'Poligonos_Urbano_PortoAlegre_km2_shp',
+  fileFormat: 'SHP',
+  folder: 'MapBiomas_Export'
+});
